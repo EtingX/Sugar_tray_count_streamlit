@@ -6,6 +6,7 @@
 # - 基于 PlantCV 分割，计算“每株平均白像素”，可复用上一次平均值加速批处理。
 # - 导出 results.csv + 透明背景的分割 PNG，打包为一个 ZIP 下载。
 # - 修复：Clear 按钮通过 nonce 强制重建画布，稳定清空不崩溃。
+# - 新增：大图兼容 + 展示缩放（画布更稳），框坐标自动还原到原图。
 # - 版本提示：当 Streamlit 过新导致 drawable-canvas 不兼容时给出侧边栏提示。
 # ---------------------------------------------------
 
@@ -18,7 +19,10 @@ from typing import List, Tuple, Optional
 
 import numpy as np
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageFile
+Image.MAX_IMAGE_PIXELS = None            # 允许加载超大图
+ImageFile.LOAD_TRUNCATED_IMAGES = True   # 允许读取“看似截断”的大图
+
 import cv2
 from plantcv import plantcv as pcv
 
@@ -66,7 +70,6 @@ def segmentation(image_path: str) -> Tuple[int, np.ndarray]:
     white_pixels = int(np.sum(clean == 255))
     return white_pixels, clean
 
-
 def box_white_pixels(bin_img: np.ndarray, box: Tuple[int, int, int, int]) -> int:
     h, w = bin_img.shape[:2]
     x1, y1, x2, y2 = box
@@ -79,7 +82,6 @@ def box_white_pixels(bin_img: np.ndarray, box: Tuple[int, int, int, int]) -> int
     roi = bin_img[y1:y2, x1:x2]
     return int(np.count_nonzero(roi))
 
-
 def _to_uint8_rgb(img: np.ndarray) -> np.ndarray:
     arr = np.asarray(img)
     if arr.dtype != np.uint8:
@@ -91,7 +93,6 @@ def _to_uint8_rgb(img: np.ndarray) -> np.ndarray:
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
     return arr
-
 
 def create_seg_cutout_rgba(image_path: str, mask: np.ndarray) -> np.ndarray:
     """
@@ -117,7 +118,6 @@ def create_seg_cutout_rgba(image_path: str, mask: np.ndarray) -> np.ndarray:
     rgba = np.dstack([rgb, alpha]).astype(np.uint8)
     return rgba
 
-
 # -----------------------------
 # 数据模型
 # -----------------------------
@@ -130,7 +130,6 @@ class ImageResult:
     image_path: str
     seg_cutout_rgba: Optional[np.ndarray]
 
-
 # -----------------------------
 # 工具函数
 # -----------------------------
@@ -141,19 +140,16 @@ def save_np_rgba_to_png_bytes(rgba: np.ndarray) -> bytes:
     im.save(buf, format="PNG")
     return buf.getvalue()
 
-
 def ensure_tempdir() -> str:
     if "_tmp_root" not in st.session_state:
         st.session_state["_tmp_root"] = tempfile.mkdtemp(prefix="seedling_counter_")
     return st.session_state["_tmp_root"]
-
 
 def persist_uploaded_file(upload, dst_dir: str) -> str:
     dst_path = os.path.join(dst_dir, upload.name)
     with open(dst_path, "wb") as f:
         f.write(upload.getbuffer())
     return dst_path
-
 
 def extract_zip_to_dir(zip_bytes: bytes, dst_dir: str) -> List[str]:
     paths: List[str] = []
@@ -169,14 +165,12 @@ def extract_zip_to_dir(zip_bytes: bytes, dst_dir: str) -> List[str]:
             paths.append(out_path)
     return sorted(paths)
 
-
 def list_images_in_dir(d: str) -> List[str]:
     return sorted([
         os.path.join(d, f)
         for f in os.listdir(d)
         if f.lower().endswith((".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"))
     ])
-
 
 # -----------------------------
 # Streamlit 页面
@@ -269,10 +263,23 @@ with colL:
     else:
         idx = max(0, min(idx, len(images) - 1))
         curr_path = images[idx]
-        img = Image.open(curr_path).convert("RGB")
-        w, h = img.size
 
-        st.write(f"**Image {idx+1} / {len(images)}:** `{os.path.basename(curr_path)}`")
+        # ---- 读图 + 展示缩放（关键修复点） ----
+        img = Image.open(curr_path).convert("RGB")
+        orig_w, orig_h = img.size
+
+        MAX_W = 1400  # 根据需要可改为 1200/1600
+        scale = 1.0
+        if orig_w > MAX_W:
+            scale = MAX_W / float(orig_w)
+        disp_w = int(round(orig_w * scale))
+        disp_h = int(round(orig_h * scale))
+        disp_img = img if scale == 1.0 else img.resize((disp_w, disp_h), Image.LANCZOS)
+
+        st.write(
+            f"**Image {idx+1} / {len(images)}:** `{os.path.basename(curr_path)}` "
+            f"(display {disp_w}×{disp_h}, original {orig_w}×{orig_h})"
+        )
 
         # 使用 nonce 生成唯一 key，清空时递增 nonce 来强制重建组件
         canvas_key = f"canvas_{idx}_{st.session_state['canvas_nonce']}"
@@ -280,24 +287,28 @@ with colL:
             fill_color="rgba(0, 0, 0, 0)",  # no fill
             stroke_width=3,
             stroke_color="#ff0000",
-            background_image=img,
-            height=h,
-            width=w,
+            background_image=disp_img,      # 用缩放后的图
+            height=disp_h,
+            width=disp_w,
             drawing_mode="rect",
             key=canvas_key,
         )
 
-        # 读取矩形框
+        # 读取矩形框（把画布坐标还原回原图坐标）
         boxes: List[Tuple[int, int, int, int]] = []
         if canvas_result.json_data is not None:
+            inv = 1.0 / scale
             for obj in canvas_result.json_data.get("objects", []):
                 if obj.get("type") == "rect":
                     left = int(round(obj.get("left", 0)))
                     top = int(round(obj.get("top", 0)))
                     width = int(round(obj.get("width", 0)))
                     height = int(round(obj.get("height", 0)))
-                    x1, y1 = left, top
-                    x2, y2 = left + width, top + height
+
+                    x1 = int(round(left * inv))
+                    y1 = int(round(top * inv))
+                    x2 = int(round((left + width) * inv))
+                    y2 = int(round((top + height) * inv))
                     boxes.append((x1, y1, x2, y2))
 
 with colR:
