@@ -1,5 +1,5 @@
 streamlit==1.40.0
-streamlit-drawable-canvas==0.9.3
+streamlit-drawable-canvas==0.9.7
 
 opencv-python-headless==4.10.0.84
 plantcv==4.9
@@ -12,3 +12,4 @@ scipy==1.15.3
 Pillow==11.3.0
 packaging==24.2
 tifffile==2025.5.10
+
