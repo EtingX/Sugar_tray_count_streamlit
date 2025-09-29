@@ -268,7 +268,7 @@ with colL:
         img = Image.open(curr_path).convert("RGB")
         orig_w, orig_h = img.size
 
-        MAX_W = 1400  # 根据需要可改为 1200/1600
+        MAX_W = 1200  # 根据需要可改为 1200/1600
         scale = 1.0
         if orig_w > MAX_W:
             scale = MAX_W / float(orig_w)
@@ -465,3 +465,4 @@ if export_clicked:
 st.caption(
     "Tip: 用 ZIP 上传整文件夹；在图上画多个矩形，填写这些框里的幼苗总数，先点 Compute，再 Confirm & Next。"
 )
+
