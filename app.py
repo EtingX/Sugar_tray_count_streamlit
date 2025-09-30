@@ -26,7 +26,7 @@ from plantcv import plantcv as pcv
 
 # 画布组件：优先修复版，其次原版（两者只装一个即可）
 try:
-    from streamlit_drawable_c a nvas import st_canvas  # 修复版包也暴露同名模块
+    from streamlit_drawable_canvas import st_canvas  # 修复版包也暴露同名模块
 except Exception:
     try:
         from streamlit_drawable_canvas_fix import st_canvas  # 少数镜像用这个导入名
@@ -443,3 +443,4 @@ if export_clicked:
 
 # Footer
 st.caption("Tip: 用 ZIP 上传整文件夹；先画框并填总幼苗数 → Compute → Confirm & Next。")
+
